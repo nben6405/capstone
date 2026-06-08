@@ -35,8 +35,8 @@ TILE_W = SCINT_WIDTH  / GRID_COLS
 TILE_H = SCINT_HEIGHT / GRID_ROWS
 
 # Layer heights (cm above bottom imaging grid)
-Z_TOP_PADDLE  = 30.0  # top trigger paddle / top imaging grid (Config B)
-Z_BOT_PADDLE  = 20.0  # second trigger paddle (Config A only)
+Z_TOP_PADDLE  = 50.0  # top trigger paddle / top imaging grid (Config B)
+Z_BOT_PADDLE  = 40.0  # second trigger paddle (Config A only)
 Z_IMAGING_BOT =  0.0  # bottom imaging grid — reference plane
 
 # Dense block
@@ -44,8 +44,8 @@ BLOCK_X     =  5.0    # cm  left edge
 BLOCK_Y     =  5.0    # cm  bottom edge
 BLOCK_W     = 10.0    # cm  width
 BLOCK_H     = 10.0    # cm  height
-BLOCK_Z     = 15.0    # cm  height above bottom grid (sits between layers)
-BLOCK_ATTEN =  0.85   # fraction of muons blocked (0=transparent, 1=opaque)
+BLOCK_Z     = 30.0    # cm  height above bottom grid (sits between layers)
+BLOCK_ATTEN =  0.1   # fraction of muons blocked (0=transparent, 1=opaque)
 
 # Simulation
 N_MUONS = 100_000
