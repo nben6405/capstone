@@ -262,59 +262,69 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 def plot_results(res_a, res_b):
+    import os
     hit_a, ev_a, mu_a, snr_a, mh_a = res_a
     hit_b, ev_b, mu_b, snr_b, mh_b = res_b
 
     rate_a = hit_a / ev_a if ev_a > 0 else hit_a.astype(float)
     rate_b = hit_b / ev_b if ev_b > 0 else hit_b.astype(float)
 
-    # Imaging time estimate — ~1 muon/cm^2/min at sea level
     FLUX   = 1.0
     area   = SCINT_WIDTH * SCINT_HEIGHT
     rate   = FLUX * area
     time_a = mu_a / rate
     time_b = mu_b / rate
 
-    # ── Academic style ────────────────────────────────────────────────────────
+    # ── Academic rcParams ─────────────────────────────────────────────────────
     plt.rcParams.update({
-        'font.family':       'serif',
-        'font.serif':        ['DejaVu Serif', 'Times New Roman', 'Times', 'serif'],
-        'font.size':         9,
-        'axes.labelsize':    9,
-        'axes.titlesize':    9,
-        'xtick.labelsize':   8,
-        'ytick.labelsize':   8,
-        'legend.fontsize':   8,
-        'axes.linewidth':    0.6,
-        'xtick.major.width': 0.6,
-        'ytick.major.width': 0.6,
-        'xtick.direction':   'in',
-        'ytick.direction':   'in',
-        'xtick.top':         True,
-        'ytick.right':       True,
-        'axes.grid':         False,
+        'font.family':        'serif',
+        'font.serif':         ['DejaVu Serif', 'Times New Roman', 'Times', 'serif'],
+        'font.size':          8,
+        'axes.labelsize':     8,
+        'axes.titlesize':     8,
+        'xtick.labelsize':    7,
+        'ytick.labelsize':    7,
+        'legend.fontsize':    7,
+        'axes.linewidth':     0.6,
+        'xtick.major.width':  0.5,
+        'ytick.major.width':  0.5,
+        'xtick.major.size':   3,
+        'ytick.major.size':   3,
+        'xtick.direction':    'in',
+        'ytick.direction':    'in',
+        'xtick.top':          True,
+        'ytick.right':        True,
+        'axes.grid':          False,
+        'figure.dpi':         300,
     })
 
-    fig = plt.figure(figsize=(7.2, 8.5), facecolor='white', dpi=300)
+    # ── Layout: two rows, explicit figure height gives caption room ───────────
+    # Row 0: three hit maps  Row 1: SNR plot + table
+    # Caption lives in its own axes below row 1 — no fig.text overlap
+    fig = plt.figure(figsize=(10.0, 7.8), facecolor='white')
 
-    # Caption-style title at the very top
-    fig.text(
-        0.5, 0.985,
-        'Figure 1. Simulated muon hit-rate maps and detection statistics '
-        'for two scintillator detector configurations.',
-        ha='center', va='top', fontsize=8, style='italic',
-        color='black', wrap=True,
-        transform=fig.transFigure
+    # Three-row gridspec: maps | plots | caption
+    outer = gridspec.GridSpec(
+        3, 1, figure=fig,
+        height_ratios=[2.6, 2.6, 0.8],
+        hspace=0.0,
+        left=0.06, right=0.98,
+        top=0.95, bottom=0.02
     )
 
-    gs = gridspec.GridSpec(
-        2, 3, figure=fig,
-        hspace=0.55, wspace=0.42,
-        left=0.09, right=0.97,
-        top=0.92, bottom=0.09
+    # Top row: three heatmaps
+    gs_top = gridspec.GridSpecFromSubplotSpec(
+        1, 3, subplot_spec=outer[0],
+        wspace=0.55, hspace=0
     )
 
-    cmap = plt.cm.viridis   # perceptually uniform, prints well in greyscale
+    # Middle row: SNR plot + table
+    gs_mid = gridspec.GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[1],
+        wspace=0.35, width_ratios=[2.2, 1]
+    )
+
+    cmap = plt.cm.viridis
     vmax = max(rate_a.max(), rate_b.max())
 
     def draw_block(ax):
@@ -324,147 +334,143 @@ def plot_results(res_a, res_b):
         rh = BLOCK_H / TILE_H
         ax.add_patch(Rectangle(
             (rx, ry), rw, rh,
-            linewidth=0.8, edgecolor='white',
+            linewidth=0.9, edgecolor='white',
             facecolor='none', linestyle='--', zorder=5
         ))
 
-    def style_ax(ax, label, subtitle):
-        """Label format: bold panel letter + subtitle below, no box title."""
-        ax.set_xlabel('Tile column', labelpad=3)
-        ax.set_ylabel('Tile row',    labelpad=3)
+    def style_heatmap(ax, panel, subtitle):
+        ax.set_xlabel('Tile column', labelpad=2)
+        ax.set_ylabel('Tile row',    labelpad=2)
         ax.set_xticks(range(GRID_COLS))
         ax.set_yticks(range(GRID_ROWS))
-        # Panel label in top-left corner inside axes
-        ax.text(0.03, 0.97, label, transform=ax.transAxes,
-                fontsize=9, fontweight='bold', va='top', ha='left',
+        ax.text(0.03, 0.97, panel, transform=ax.transAxes,
+                fontsize=8, fontweight='bold', va='top', ha='left',
                 color='white',
-                bbox=dict(boxstyle='round,pad=0.15', facecolor='black',
-                          alpha=0.45, edgecolor='none'))
-        # Subtitle below axes
-        ax.set_title(subtitle, fontsize=8, pad=4, loc='left', style='italic')
+                bbox=dict(boxstyle='round,pad=0.12', facecolor='black',
+                          alpha=0.5, edgecolor='none'))
+        ax.set_title(subtitle, fontsize=7.5, pad=3, loc='left', style='italic')
 
-    # ── (a) Config A hit map ──────────────────────────────────────────────────
-    ax_a = fig.add_subplot(gs[0, 0])
+    # ── (a) Config A ─────────────────────────────────────────────────────────
+    ax_a = fig.add_subplot(gs_top[0, 0])
     im_a = ax_a.imshow(rate_a, cmap=cmap, vmin=0, vmax=vmax,
                        origin='lower', aspect='equal',
                        extent=[-0.5, GRID_COLS-0.5, -0.5, GRID_ROWS-0.5])
     draw_block(ax_a)
-    style_ax(ax_a, '(a)', 'Config A: paddles + bottom grid')
-    cb_a = plt.colorbar(im_a, ax=ax_a, fraction=0.046, pad=0.04)
-    cb_a.set_label('Relative hit rate', fontsize=7.5)
-    cb_a.ax.tick_params(labelsize=7)
+    style_heatmap(ax_a, '(a)', 'Config A: paddles + bottom grid')
+    cb = plt.colorbar(im_a, ax=ax_a, fraction=0.046, pad=0.04)
+    cb.set_label('Rel. hit rate', fontsize=7)
+    cb.ax.tick_params(labelsize=6.5)
 
-    # ── (b) Config B hit map ──────────────────────────────────────────────────
-    ax_b = fig.add_subplot(gs[0, 1])
+    # ── (b) Config B ─────────────────────────────────────────────────────────
+    ax_b = fig.add_subplot(gs_top[0, 1])
     im_b = ax_b.imshow(rate_b, cmap=cmap, vmin=0, vmax=vmax,
                        origin='lower', aspect='equal',
                        extent=[-0.5, GRID_COLS-0.5, -0.5, GRID_ROWS-0.5])
     draw_block(ax_b)
-    style_ax(ax_b, '(b)', 'Config B: dual imaging grids')
-    cb_b = plt.colorbar(im_b, ax=ax_b, fraction=0.046, pad=0.04)
-    cb_b.set_label('Relative hit rate', fontsize=7.5)
-    cb_b.ax.tick_params(labelsize=7)
+    style_heatmap(ax_b, '(b)', 'Config B: dual imaging grids')
+    cb = plt.colorbar(im_b, ax=ax_b, fraction=0.046, pad=0.04)
+    cb.set_label('Rel. hit rate', fontsize=7)
+    cb.ax.tick_params(labelsize=6.5)
 
-    # ── (c) Difference map ────────────────────────────────────────────────────
-    ax_d = fig.add_subplot(gs[0, 2])
+    # ── (c) Difference ───────────────────────────────────────────────────────
+    ax_d = fig.add_subplot(gs_top[0, 2])
     diff = rate_a - rate_b
     lim  = np.abs(diff).max() if np.abs(diff).max() > 0 else 1
     im_d = ax_d.imshow(diff, cmap='RdBu_r', vmin=-lim, vmax=lim,
                        origin='lower', aspect='equal',
                        extent=[-0.5, GRID_COLS-0.5, -0.5, GRID_ROWS-0.5])
     draw_block(ax_d)
-    style_ax(ax_d, '(c)', 'Difference map (A\u2212B)')
-    cb_d = plt.colorbar(im_d, ax=ax_d, fraction=0.046, pad=0.04)
-    cb_d.set_label('\u0394 hit rate', fontsize=7.5)
-    cb_d.ax.tick_params(labelsize=7)
+    style_heatmap(ax_d, '(c)', 'Difference map (A\u2212B)')
+    cb = plt.colorbar(im_d, ax=ax_d, fraction=0.046, pad=0.04)
+    cb.set_label('\u0394 hit rate', fontsize=7)
+    cb.ax.tick_params(labelsize=6.5)
 
-    # ── (d) SNR vs muon count ─────────────────────────────────────────────────
-    ax_snr = fig.add_subplot(gs[1, :2])
-    ax_snr.plot(mh_a, snr_a, color='#2166ac', linewidth=1.2,
+    # ── (d) SNR curve ─────────────────────────────────────────────────────────
+    ax_snr = fig.add_subplot(gs_mid[0, 0])
+    ax_snr.plot(mh_a, snr_a, color='#2166ac', linewidth=1.1,
                 label='Config A (paddles + grid)')
-    ax_snr.plot(mh_b, snr_b, color='#d6604d', linewidth=1.2,
+    ax_snr.plot(mh_b, snr_b, color='#d6604d', linewidth=1.1,
                 label='Config B (dual grid)')
-    ax_snr.axhline(3.0, color='black', linewidth=0.7,
-                   linestyle='--', label='SNR\u2009=\u20093 threshold')
+    ax_snr.axhline(3.0, color='black', linewidth=0.65,
+                   linestyle='--', label='SNR\u2009=\u20093')
     if mu_a < N_MUONS:
-        ax_snr.axvline(mu_a, color='#2166ac', linewidth=0.7, linestyle=':')
+        ax_snr.axvline(mu_a, color='#2166ac', linewidth=0.65, linestyle=':')
     if mu_b < N_MUONS:
-        ax_snr.axvline(mu_b, color='#d6604d', linewidth=0.7, linestyle=':')
-    ax_snr.set_xlabel('Simulated muon tracks')
-    ax_snr.set_ylabel('Detection SNR')
-    ax_snr.set_title('(d)', fontsize=9, fontweight='bold', loc='left', pad=4)
-    ax_snr.legend(frameon=True, framealpha=0.9, edgecolor='#cccccc',
-                  fontsize=7.5, loc='upper left')
+        ax_snr.axvline(mu_b, color='#d6604d', linewidth=0.65, linestyle=':')
+    ax_snr.set_xlabel('Simulated muon tracks', labelpad=2)
+    ax_snr.set_ylabel('Detection SNR', labelpad=2)
+    ax_snr.set_title('(d)', fontsize=8, fontweight='bold', loc='left', pad=3)
+    ax_snr.legend(frameon=True, framealpha=0.9, edgecolor='#bbbbbb',
+                  fontsize=7, loc='upper left')
     ax_snr.set_xlim(left=0)
     ax_snr.set_ylim(bottom=0)
 
-    # ── Parameter table ───────────────────────────────────────────────────────
-    ax_t = fig.add_subplot(gs[1, 2])
+    # ── (e) Parameter table ───────────────────────────────────────────────────
+    ax_t = fig.add_subplot(gs_mid[0, 1])
     ax_t.axis('off')
-    ax_t.set_title('(e)', fontsize=9, fontweight='bold', loc='left', pad=4)
+    ax_t.set_title('(e)', fontsize=8, fontweight='bold', loc='left', pad=3)
 
-    rows = [
-        ['Parameter',                   'Value'],
-        ['Active area',                 f'{SCINT_WIDTH}\u00d7{SCINT_HEIGHT}\u2009cm'],
-        ['Grid',                        f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
-        ['Tile size',                   f'{TILE_W:.1f}\u00d7{TILE_H:.1f}\u2009cm'],
-        ['Layer spacing',               f'{Z_TOP_PADDLE:.0f}\u2009cm'],
-        ['Block dimensions',            f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f}\u2009cm'],
-        ['Block attenuation',           f'{BLOCK_ATTEN*100:.0f}%'],
-        ['Muon flux (sea level)',        '1\u2009cm\u207b\u00b2\u2009min\u207b\u00b9'],
-        ['Config A valid events',       f'{ev_a:,}'],
-        ['Config B valid events',       f'{ev_b:,}'],
-        ['Config A muons to SNR\u22653', f'{mu_a:,}'],
-        ['Config B muons to SNR\u22653', f'{mu_b:,}'],
-        ['Config A est. image time',    f'~{time_a:.1f}\u2009min'],
-        ['Config B est. image time',    f'~{time_b:.1f}\u2009min'],
+    tbl_data = [
+        ['Active area',          f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f} cm'],
+        ['Grid',                 f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
+        ['Tile size',            f'{TILE_W:.1f}\u00d7{TILE_H:.1f} cm'],
+        ['Layer spacing',        f'{Z_TOP_PADDLE:.0f} cm'],
+        ['Block size',           f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f} cm'],
+        ['Attenuation',          f'{BLOCK_ATTEN*100:.0f}%'],
+        ['Sea-level flux',       '1 cm\u207b\u00b2 min\u207b\u00b9'],
+        ['A valid events',       f'{ev_a:,}'],
+        ['B valid events',       f'{ev_b:,}'],
+        ['A \u2192 SNR\u22653',  f'{mu_a:,} \u03bc'],
+        ['B \u2192 SNR\u22653',  f'{mu_b:,} \u03bc'],
+        ['A image time',         f'~{time_a:.1f} min'],
+        ['B image time',         f'~{time_b:.1f} min'],
     ]
 
     tbl = ax_t.table(
-        cellText=rows[1:],
-        colLabels=rows[0],
-        loc='center',
+        cellText=tbl_data,
+        colLabels=['Parameter', 'Value'],
+        loc='upper center',
         cellLoc='left',
         bbox=[0.0, 0.0, 1.0, 1.0]
     )
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(7)
-
-    # Style header row
+    tbl.set_fontsize(6.5)
     for col in range(2):
         cell = tbl[0, col]
-        cell.set_facecolor('#dddddd')
+        cell.set_facecolor('#d0d0d0')
         cell.set_text_props(fontweight='bold')
-        cell.set_edgecolor('#aaaaaa')
-
-    # Style data rows
-    for row in range(1, len(rows)):
+        cell.set_edgecolor('#999999')
+    for row in range(1, len(tbl_data) + 1):
         for col in range(2):
             cell = tbl[row, col]
-            cell.set_facecolor('white' if row % 2 == 0 else '#f7f7f7')
+            cell.set_facecolor('white' if row % 2 == 1 else '#f4f4f4')
             cell.set_edgecolor('#cccccc')
-
     tbl.auto_set_column_width([0, 1])
 
-    # ── Caption block at bottom ───────────────────────────────────────────────
-    caption = (
-        f'Simulation parameters: {GRID_ROWS}\u00d7{GRID_COLS} scintillator tile grid '
-        f'({TILE_W:.1f}\u00d7{TILE_H:.1f}\u2009cm tiles) over a '
-        f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f}\u2009cm active area. '
-        f'Layer separation {Z_TOP_PADDLE:.0f}\u2009cm. Dense block '
-        f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f}\u2009cm at {BLOCK_ATTEN*100:.0f}\\% attenuation, '
-        f'centred at ({BLOCK_X+BLOCK_W/2:.0f}, {BLOCK_Y+BLOCK_H/2:.0f})\u2009cm. '
-        f'Muon tracks sampled from a cos\u00b2(\u03b8) zenith distribution '
-        f'(\u03b8\u2009<\u200970\u00b0). Dashed white rectangles in (a)\u2013(c) '
-        f'indicate the projected block boundary. Dotted vertical lines in (d) '
-        f'mark the muon count at which SNR\u2009=\u20093 is first reached.'
+    # ── Caption in its own axes (no overlap) ──────────────────────────────────
+    ax_cap = fig.add_subplot(outer[2])
+    ax_cap.axis('off')
+    line1 = (
+        f'Figure 1.  Simulated muon hit-rate maps and detection statistics for two detector '
+        f'configurations ({GRID_ROWS}\u00d7{GRID_COLS} grid, {TILE_W:.1f}\u00d7{TILE_H:.1f}\u2009cm tiles, '
+        f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f}\u2009cm active area, layer spacing {Z_TOP_PADDLE:.0f}\u2009cm).'
     )
-    fig.text(0.5, 0.005, caption, ha='center', va='bottom',
-             fontsize=6.5, style='italic', color='#333333',
-             wrap=True, transform=fig.transFigure,
-             multialignment='center')
+    line2 = (
+        f'Dense block {BLOCK_W:.0f}\u00d7{BLOCK_H:.0f}\u2009cm at {BLOCK_ATTEN*100:.0f}% attenuation '
+        f'centred at ({BLOCK_X+BLOCK_W/2:.0f},\u2009{BLOCK_Y+BLOCK_H/2:.0f})\u2009cm. '
+        f'Tracks sampled from cos\u00b2(\u03b8) zenith distribution (\u03b8\u2009<\u200970\u00b0); '
+        f'sea-level flux 1\u2009cm\u207b\u00b2\u2009min\u207b\u00b9.'
+    )
+    line3 = (
+        f'Dashed rectangles in (a)\u2013(c) show the projected block boundary. '
+        f'Dotted vertical lines in (d) mark the muon count at which SNR\u2009=\u20093 is first reached.'
+    )
+    for i, line in enumerate([line1, line2, line3]):
+        ax_cap.text(0.5, 0.92 - i * 0.32, line,
+                    ha='center', va='top', fontsize=6.8,
+                    style='italic', color='#222222',
+                    transform=ax_cap.transAxes)
 
-    import os
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        'muography_sim_results.png')
     plt.savefig(out, dpi=300, bbox_inches='tight', facecolor='white')
