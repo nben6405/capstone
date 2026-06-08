@@ -4,7 +4,7 @@ muography_sim.py
 Simulates two detector configurations for a binary muon shadow imager.
 
   Config A: 2 large single-plane trigger paddles (top) + imaging grid (bottom)
-  Config B: Imaging grid on top AND bottom (tiled both layers)
+  Config B: 3 imaging grids (top 2 + bottom 1), same-tile coincidence required
 
 Physical units throughout are cm.
 Muon tracks follow a realistic cos^2(theta) zenith distribution.
@@ -19,12 +19,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Rectangle
+import os
 
 # ── Physical geometry (all units in cm) ──────────────────────────────────────
 
 # Scintillator active area
-SCINT_WIDTH  = 20.0   # cm
-SCINT_HEIGHT = 20.0   # cm
+SCINT_WIDTH  = 40.0
+SCINT_HEIGHT = 40.0
 
 # Grid resolution — set directly
 GRID_COLS = 4
@@ -35,20 +36,22 @@ TILE_W = SCINT_WIDTH  / GRID_COLS
 TILE_H = SCINT_HEIGHT / GRID_ROWS
 
 # Layer heights (cm above bottom imaging grid)
-Z_TOP_PADDLE  = 40.0  # top trigger paddle / top imaging grid (Config B)
-Z_BOT_PADDLE  = 30.0  # second trigger paddle (Config A only)
+Z_TOP_PADDLE  = 35.0  # top trigger paddle (Config A) / top grid (Config B)
+Z_BOT_PADDLE  = 25.0  # second trigger paddle (Config A only)
+Z_MID_GRID    = 25.0  # second imaging grid (Config B only)
 Z_IMAGING_BOT =  0.0  # bottom imaging grid — reference plane
 
-# Dense block
-BLOCK_X     =  5.0    # cm  left edge
-BLOCK_Y     =  5.0    # cm  bottom edge
-BLOCK_W     = 10.0    # cm  width
-BLOCK_H     = 10.0    # cm  height
-BLOCK_Z     = 30.0    # cm  height above bottom grid (sits between layers)
-BLOCK_ATTEN =  0.70   # fraction of muons blocked (0=transparent, 1=opaque)
+# Dense block — 20x20cm centred on 40x40cm area, covers 2x2 tiles cleanly
+BLOCK_X     = 10.0    # cm  left edge
+BLOCK_Y     = 10.0    # cm  bottom edge
+BLOCK_W     = 20.0    # cm  width  (2 tiles)
+BLOCK_H     = 20.0    # cm  height (2 tiles)
+BLOCK_Z     = 10.0    # cm  height above bottom grid
+BLOCK_ATTEN =  0.148  # 4 inch (~10cm) steel
 
-# Simulation
-N_MUONS = 100_000
+# Simulation — higher count needed because muons are generated over a padded
+# area larger than the active detector, so many miss the bottom grid
+N_MUONS = 1_000_000
 
 # ── Track generation ─────────────────────────────────────────────────────────
 
@@ -63,9 +66,17 @@ def generate_muons(n, rng):
 
     Zenith distribution follows cos^2(theta).
     Hard cutoff at 70 degrees — flux negligible beyond that.
+
+    Entry points are sampled over a padded area larger than the active
+    detector — angled muons entering outside the active area can still
+    drift onto the bottom grid. Without this, edge tiles receive
+    artificially fewer counts than central tiles, masking the shadow.
     """
-    x0 = rng.uniform(0, SCINT_WIDTH,  n)
-    y0 = rng.uniform(0, SCINT_HEIGHT, n)
+    # Max horizontal drift at 70 degrees over full layer height
+    margin = Z_TOP_PADDLE * np.tan(np.radians(70))
+
+    x0 = rng.uniform(-margin, SCINT_WIDTH  + margin, n)
+    y0 = rng.uniform(-margin, SCINT_HEIGHT + margin, n)
 
     # Rejection sampling for cos^2(theta) distribution
     theta = []
@@ -78,15 +89,10 @@ def generate_muons(n, rng):
 
     # Azimuth uniform — no preferred horizontal direction
     phi = rng.uniform(0, 2 * np.pi, n)
-
     return x0, y0, theta, phi
 
 
 def track_position_at_z(x0, y0, theta, phi, z_start, z_target):
-    """
-    Return (x, y) position of a muon track at z_target.
-    Muon enters at (x0, y0) at height z_start travelling at (theta, phi).
-    """
     dz    = z_start - z_target
     drift = dz * np.tan(theta)
     x     = x0 + drift * np.cos(phi)
@@ -96,92 +102,73 @@ def track_position_at_z(x0, y0, theta, phi, z_start, z_target):
 # ── Block intersection ────────────────────────────────────────────────────────
 
 def check_block(x0, y0, theta, phi, rng):
-    """
-    Compute where each muon passes through BLOCK_Z and check if it
-    hits the block. Apply attenuation probabilistically.
-    Returns boolean mask — True means muon survived.
-    """
     x_block, y_block = track_position_at_z(
         x0, y0, theta, phi,
         z_start  = Z_TOP_PADDLE,
         z_target = BLOCK_Z
     )
-
     in_block = (
         (x_block >= BLOCK_X) & (x_block <= BLOCK_X + BLOCK_W) &
         (y_block >= BLOCK_Y) & (y_block <= BLOCK_Y + BLOCK_H)
     )
-
     absorbed = in_block & (rng.random(len(x0)) < BLOCK_ATTEN)
     return ~absorbed
 
 
 def pos_to_tile(x, y):
-    """
-    Convert physical (x, y) in cm to (row, col) tile index.
-    Returns -1 for positions outside the active area.
-    """
     col = (x / TILE_W).astype(int)
     row = (y / TILE_H).astype(int)
-
     in_bounds = (
         (x >= 0) & (x < SCINT_WIDTH) &
         (y >= 0) & (y < SCINT_HEIGHT)
     )
-
     col = np.clip(col, 0, GRID_COLS - 1)
     row = np.clip(row, 0, GRID_ROWS - 1)
-
     col = np.where(in_bounds, col, -1)
     row = np.where(in_bounds, row, -1)
-
     return row, col
 
 # ── Config simulations ────────────────────────────────────────────────────────
 
 def simulate_A(x0, y0, theta, phi, survived, rng):
     """
-    Config A: large single-plane paddles on top, imaging grid on bottom.
-    Valid event = muon survived block AND lands in active area of bottom grid.
-    Position determined entirely by bottom grid tile.
+    Config A: 2 large paddles on top, imaging grid on bottom.
+    Valid event = survived block + lands in active area of bottom grid.
     """
     hit_map = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     total_events = 0
 
     x_bot, y_bot = track_position_at_z(
         x0[survived], y0[survived], theta[survived], phi[survived],
-        z_start  = Z_TOP_PADDLE,
-        z_target = Z_IMAGING_BOT
+        z_start=Z_TOP_PADDLE, z_target=Z_IMAGING_BOT
     )
-
     row_bot, col_bot = pos_to_tile(x_bot, y_bot)
     in_bounds = (row_bot >= 0) & (col_bot >= 0)
 
     for r, c in zip(row_bot[in_bounds], col_bot[in_bounds]):
         hit_map[r, c] += 1
-        total_events += 1
+        total_events  += 1
 
     return hit_map, total_events
 
 
 def simulate_B(x0, y0, theta, phi, survived, rng):
     """
-    Config B: imaging grid on top AND bottom.
-    Valid event = muon survived block AND fires the same tile on both grids.
+    Config B: 3 imaging grids (top 2 + bottom 1).
+    Valid event = survived block + same tile fires on top grid AND bottom grid.
     Angled muons that drift across a tile boundary are rejected.
     """
     hit_map = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     total_events = 0
 
-    # Top grid — muon enters here so no drift from top paddle
+    # Top grid — entry position, no drift yet
     x_top = x0[survived].copy()
     y_top = y0[survived].copy()
 
-    # Bottom grid — muon has drifted
+    # Bottom grid — muon has drifted over full layer spacing
     x_bot, y_bot = track_position_at_z(
         x0[survived], y0[survived], theta[survived], phi[survived],
-        z_start  = Z_TOP_PADDLE,
-        z_target = Z_IMAGING_BOT
+        z_start=Z_TOP_PADDLE, z_target=Z_IMAGING_BOT
     )
 
     row_top, col_top = pos_to_tile(x_top, y_top)
@@ -189,14 +176,12 @@ def simulate_B(x0, y0, theta, phi, survived, rng):
 
     in_bounds = (row_top >= 0) & (col_top >= 0) & \
                 (row_bot >= 0) & (col_bot >= 0)
-
     same_tile = (row_top == row_bot) & (col_top == col_bot)
-
-    valid = in_bounds & same_tile
+    valid     = in_bounds & same_tile
 
     for r, c in zip(row_bot[valid], col_bot[valid]):
         hit_map[r, c] += 1
-        total_events += 1
+        total_events  += 1
 
     return hit_map, total_events
 
@@ -205,20 +190,15 @@ def simulate_B(x0, y0, theta, phi, survived, rng):
 def run_snr_test(config_fn, x0, y0, theta, phi, rng,
                  target_snr=3.0, step=500):
     """
-    Incrementally accumulate events and track when SNR first hits target.
-
-    SNR = (mean open count - mean shadow count) / sqrt(mean open count)
-
-    Poisson SNR — noise floor is sqrt(N) for counting statistics.
-    Stable regardless of hit map uniformity, unlike the std-based version.
+    Poisson SNR = (mean open count - mean shadow count) / sqrt(mean open count)
+    Stable for uniform hit maps, physically grounded in counting statistics.
     """
     hit_map = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
-    total_events = 0
-    snr_history = []
-    muon_history = []
+    total_events    = 0
+    snr_history     = []
+    muon_history    = []
     muons_to_detect = None
 
-    # Pre-classify tiles as shadow or open based on block projection
     shadow_mask = np.zeros((GRID_ROWS, GRID_COLS), dtype=bool)
     for r in range(GRID_ROWS):
         for c in range(GRID_COLS):
@@ -230,10 +210,8 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
 
     n = len(x0)
     for i in range(0, n, step):
-        bx  = x0[i:i+step]
-        by  = y0[i:i+step]
-        bth = theta[i:i+step]
-        bph = phi[i:i+step]
+        bx  = x0[i:i+step];  by  = y0[i:i+step]
+        bth = theta[i:i+step]; bph = phi[i:i+step]
 
         survived = check_block(bx, by, bth, bph, rng)
         batch_map, batch_events = config_fn(bx, by, bth, bph, survived, rng)
@@ -244,7 +222,6 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
         if total_events < 20:
             continue
 
-        # Work in raw counts — Poisson noise scales as sqrt(N)
         open_counts   = hit_map[~shadow_mask].astype(float)
         shadow_counts = hit_map[shadow_mask].astype(float)
 
@@ -253,8 +230,8 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
 
         mean_open   = open_counts.mean()
         mean_shadow = shadow_counts.mean()
-
         snr = (mean_open - mean_shadow) / np.sqrt(mean_open)
+
         snr_history.append(float(snr))
         muon_history.append(i + step)
 
@@ -269,7 +246,6 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
 # ── Plotting ──────────────────────────────────────────────────────────────────
 
 def plot_results(res_a, res_b):
-    import os
     hit_a, ev_a, mu_a, snr_a, mh_a = res_a
     hit_b, ev_b, mu_b, snr_b, mh_b = res_b
 
@@ -282,7 +258,6 @@ def plot_results(res_a, res_b):
     time_a = mu_a / rate
     time_b = mu_b / rate
 
-    # ── Academic rcParams ─────────────────────────────────────────────────────
     plt.rcParams.update({
         'font.family':        'serif',
         'font.serif':         ['DejaVu Serif', 'Times New Roman', 'Times', 'serif'],
@@ -305,12 +280,8 @@ def plot_results(res_a, res_b):
         'figure.dpi':         300,
     })
 
-    # ── Layout: two rows, explicit figure height gives caption room ───────────
-    # Row 0: three hit maps  Row 1: SNR plot + table
-    # Caption lives in its own axes below row 1 — no fig.text overlap
     fig = plt.figure(figsize=(10.0, 7.8), facecolor='white')
 
-    # Three-row gridspec: maps | plots | caption
     outer = gridspec.GridSpec(
         3, 1, figure=fig,
         height_ratios=[2.6, 2.6, 0.8],
@@ -318,21 +289,39 @@ def plot_results(res_a, res_b):
         left=0.06, right=0.98,
         top=0.95, bottom=0.02
     )
-
-    # Top row: three heatmaps
     gs_top = gridspec.GridSpecFromSubplotSpec(
-        1, 3, subplot_spec=outer[0],
-        wspace=0.55, hspace=0
+        1, 3, subplot_spec=outer[0], wspace=0.55
     )
-
-    # Middle row: SNR plot + table — give table more horizontal room
     gs_mid = gridspec.GridSpecFromSubplotSpec(
         1, 2, subplot_spec=outer[1],
         wspace=0.45, width_ratios=[1.8, 1.2]
     )
 
-    cmap = plt.cm.viridis
-    vmax = max(rate_a.max(), rate_b.max())
+    # ── Boosted contrast colormap ─────────────────────────────────────────────
+    # Normalize each map independently so shadow tiles always appear dark
+    # relative to open tiles, regardless of absolute count levels
+    def make_norm(rate_map):
+        """Stretch colormap so vmin=shadow mean, vmax=open mean * 1.1"""
+        shadow_mask_local = np.zeros((GRID_ROWS, GRID_COLS), dtype=bool)
+        for r in range(GRID_ROWS):
+            for c in range(GRID_COLS):
+                tx = (c + 0.5) * TILE_W
+                ty = (r + 0.5) * TILE_H
+                if (BLOCK_X <= tx <= BLOCK_X + BLOCK_W and
+                        BLOCK_Y <= ty <= BLOCK_Y + BLOCK_H):
+                    shadow_mask_local[r, c] = True
+        open_mean   = rate_map[~shadow_mask_local].mean()
+        shadow_mean = rate_map[shadow_mask_local].mean()
+        vmin = shadow_mean * 0.85   # push shadow tiles toward bottom of scale
+        vmax = open_mean   * 1.05   # push open tiles toward top of scale
+        return vmin, vmax
+
+    cmap = plt.cm.RdYlGn   # red=low (shadow), green=high (open) — high contrast
+    vmin_a, vmax_a = make_norm(rate_a)
+    vmin_b, vmax_b = make_norm(rate_b)
+    # Use shared scale across A and B so they're comparable
+    vmin = min(vmin_a, vmin_b)
+    vmax = max(vmax_a, vmax_b)
 
     def draw_block(ax):
         rx = BLOCK_X / TILE_W - 0.5
@@ -341,7 +330,7 @@ def plot_results(res_a, res_b):
         rh = BLOCK_H / TILE_H
         ax.add_patch(Rectangle(
             (rx, ry), rw, rh,
-            linewidth=0.9, edgecolor='white',
+            linewidth=1.2, edgecolor='black',
             facecolor='none', linestyle='--', zorder=5
         ))
 
@@ -352,14 +341,14 @@ def plot_results(res_a, res_b):
         ax.set_yticks(range(GRID_ROWS))
         ax.text(0.03, 0.97, panel, transform=ax.transAxes,
                 fontsize=8, fontweight='bold', va='top', ha='left',
-                color='white',
-                bbox=dict(boxstyle='round,pad=0.12', facecolor='black',
-                          alpha=0.5, edgecolor='none'))
+                color='black',
+                bbox=dict(boxstyle='round,pad=0.12', facecolor='white',
+                          alpha=0.7, edgecolor='none'))
         ax.set_title(subtitle, fontsize=7.5, pad=3, loc='left', style='italic')
 
-    # ── (a) Config A ─────────────────────────────────────────────────────────
+    # (a) Config A
     ax_a = fig.add_subplot(gs_top[0, 0])
-    im_a = ax_a.imshow(rate_a, cmap=cmap, vmin=0, vmax=vmax,
+    im_a = ax_a.imshow(rate_a, cmap=cmap, vmin=vmin, vmax=vmax,
                        origin='lower', aspect='equal',
                        extent=[-0.5, GRID_COLS-0.5, -0.5, GRID_ROWS-0.5])
     draw_block(ax_a)
@@ -368,9 +357,9 @@ def plot_results(res_a, res_b):
     cb.set_label('Rel. hit rate', fontsize=7)
     cb.ax.tick_params(labelsize=6.5)
 
-    # ── (b) Config B ─────────────────────────────────────────────────────────
+    # (b) Config B
     ax_b = fig.add_subplot(gs_top[0, 1])
-    im_b = ax_b.imshow(rate_b, cmap=cmap, vmin=0, vmax=vmax,
+    im_b = ax_b.imshow(rate_b, cmap=cmap, vmin=vmin, vmax=vmax,
                        origin='lower', aspect='equal',
                        extent=[-0.5, GRID_COLS-0.5, -0.5, GRID_ROWS-0.5])
     draw_block(ax_b)
@@ -379,7 +368,7 @@ def plot_results(res_a, res_b):
     cb.set_label('Rel. hit rate', fontsize=7)
     cb.ax.tick_params(labelsize=6.5)
 
-    # ── (c) Difference ───────────────────────────────────────────────────────
+    # (c) Difference
     ax_d = fig.add_subplot(gs_top[0, 2])
     diff = rate_a - rate_b
     lim  = np.abs(diff).max() if np.abs(diff).max() > 0 else 1
@@ -392,7 +381,7 @@ def plot_results(res_a, res_b):
     cb.set_label('\u0394 hit rate', fontsize=7)
     cb.ax.tick_params(labelsize=6.5)
 
-    # ── (d) SNR curve ─────────────────────────────────────────────────────────
+    # (d) SNR curves
     ax_snr = fig.add_subplot(gs_mid[0, 0])
     ax_snr.plot(mh_a, snr_a, color='#2166ac', linewidth=1.1,
                 label='Config A (paddles + grid)')
@@ -412,42 +401,38 @@ def plot_results(res_a, res_b):
     ax_snr.set_xlim(left=0)
     ax_snr.set_ylim(bottom=0)
 
-    # ── (e) Parameter table ───────────────────────────────────────────────────
+    # (e) Parameter table
     ax_t = fig.add_subplot(gs_mid[0, 1])
     ax_t.axis('off')
     ax_t.set_title('(e)', fontsize=8, fontweight='bold', loc='left', pad=3)
 
     tbl_data = [
-        ['Active area',      f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f} cm'],
-        ['Grid',             f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
-        ['Tile size',        f'{TILE_W:.1f}\u00d7{TILE_H:.1f} cm'],
-        ['Layer spacing',    f'{Z_TOP_PADDLE:.0f} cm'],
-        ['Block size',       f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f} cm'],
-        ['Attenuation',      f'{BLOCK_ATTEN*100:.0f}%'],
-        ['Sea-level flux',   '1 cm\u207b\u00b2 min\u207b\u00b9'],
-        ['A valid events',   f'{ev_a:,}'],
-        ['B valid events',   f'{ev_b:,}'],
+        ['Active area',         f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f} cm'],
+        ['Grid',                f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
+        ['Tile size',           f'{TILE_W:.1f}\u00d7{TILE_H:.1f} cm'],
+        ['Layer spacing',       f'{Z_TOP_PADDLE:.0f} cm'],
+        ['Block size',          f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f} cm'],
+        ['Attenuation',         f'{BLOCK_ATTEN*100:.0f}%'],
+        ['Sea-level flux',      '1 cm\u207b\u00b2 min\u207b\u00b9'],
+        ['A valid events',      f'{ev_a:,}'],
+        ['B valid events',      f'{ev_b:,}'],
         ['A \u2192 SNR\u22653', f'{mu_a:,} \u03bc'],
         ['B \u2192 SNR\u22653', f'{mu_b:,} \u03bc'],
-        ['A image time',     f'~{time_a:.1f} min'],
-        ['B image time',     f'~{time_b:.1f} min'],
+        ['A image time',        f'~{time_a:.1f} min'],
+        ['B image time',        f'~{time_b:.1f} min'],
     ]
 
     tbl = ax_t.table(
         cellText=tbl_data,
         colLabels=['Parameter', 'Value'],
-        loc='upper center',
-        cellLoc='left',
+        loc='upper center', cellLoc='left',
         bbox=[0.0, 0.0, 1.0, 1.0]
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(6.5)
-
-    # Set explicit column widths: 58% param, 42% value
     for row in range(len(tbl_data) + 1):
         tbl[row, 0].set_width(0.58)
         tbl[row, 1].set_width(0.42)
-
     for col in range(2):
         cell = tbl[0, col]
         cell.set_facecolor('#d0d0d0')
@@ -459,7 +444,7 @@ def plot_results(res_a, res_b):
             cell.set_facecolor('white' if row % 2 == 1 else '#f4f4f4')
             cell.set_edgecolor('#cccccc')
 
-    # ── Caption in its own axes (no overlap) ──────────────────────────────────
+    # Caption
     ax_cap = fig.add_subplot(outer[2])
     ax_cap.axis('off')
     line1 = (
