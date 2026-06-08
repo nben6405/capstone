@@ -307,7 +307,7 @@ def plot_results(res_a, res_b):
     outer = gridspec.GridSpec(
         3, 1, figure=fig,
         height_ratios=[2.6, 2.6, 0.8],
-        hspace=0.0,
+        hspace=0.38,
         left=0.06, right=0.98,
         top=0.95, bottom=0.02
     )
@@ -318,10 +318,10 @@ def plot_results(res_a, res_b):
         wspace=0.55, hspace=0
     )
 
-    # Middle row: SNR plot + table
+    # Middle row: SNR plot + table — give table more horizontal room
     gs_mid = gridspec.GridSpecFromSubplotSpec(
         1, 2, subplot_spec=outer[1],
-        wspace=0.35, width_ratios=[2.2, 1]
+        wspace=0.45, width_ratios=[1.8, 1.2]
     )
 
     cmap = plt.cm.viridis
@@ -411,19 +411,19 @@ def plot_results(res_a, res_b):
     ax_t.set_title('(e)', fontsize=8, fontweight='bold', loc='left', pad=3)
 
     tbl_data = [
-        ['Active area',          f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f} cm'],
-        ['Grid',                 f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
-        ['Tile size',            f'{TILE_W:.1f}\u00d7{TILE_H:.1f} cm'],
-        ['Layer spacing',        f'{Z_TOP_PADDLE:.0f} cm'],
-        ['Block size',           f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f} cm'],
-        ['Attenuation',          f'{BLOCK_ATTEN*100:.0f}%'],
-        ['Sea-level flux',       '1 cm\u207b\u00b2 min\u207b\u00b9'],
-        ['A valid events',       f'{ev_a:,}'],
-        ['B valid events',       f'{ev_b:,}'],
-        ['A \u2192 SNR\u22653',  f'{mu_a:,} \u03bc'],
-        ['B \u2192 SNR\u22653',  f'{mu_b:,} \u03bc'],
-        ['A image time',         f'~{time_a:.1f} min'],
-        ['B image time',         f'~{time_b:.1f} min'],
+        ['Active area',      f'{SCINT_WIDTH:.0f}\u00d7{SCINT_HEIGHT:.0f} cm'],
+        ['Grid',             f'{GRID_ROWS}\u00d7{GRID_COLS} tiles'],
+        ['Tile size',        f'{TILE_W:.1f}\u00d7{TILE_H:.1f} cm'],
+        ['Layer spacing',    f'{Z_TOP_PADDLE:.0f} cm'],
+        ['Block size',       f'{BLOCK_W:.0f}\u00d7{BLOCK_H:.0f} cm'],
+        ['Attenuation',      f'{BLOCK_ATTEN*100:.0f}%'],
+        ['Sea-level flux',   '1 cm\u207b\u00b2 min\u207b\u00b9'],
+        ['A valid events',   f'{ev_a:,}'],
+        ['B valid events',   f'{ev_b:,}'],
+        ['A \u2192 SNR\u22653', f'{mu_a:,} \u03bc'],
+        ['B \u2192 SNR\u22653', f'{mu_b:,} \u03bc'],
+        ['A image time',     f'~{time_a:.1f} min'],
+        ['B image time',     f'~{time_b:.1f} min'],
     ]
 
     tbl = ax_t.table(
@@ -435,6 +435,12 @@ def plot_results(res_a, res_b):
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(6.5)
+
+    # Set explicit column widths: 58% param, 42% value
+    for row in range(len(tbl_data) + 1):
+        tbl[row, 0].set_width(0.58)
+        tbl[row, 1].set_width(0.42)
+
     for col in range(2):
         cell = tbl[0, col]
         cell.set_facecolor('#d0d0d0')
@@ -445,7 +451,6 @@ def plot_results(res_a, res_b):
             cell = tbl[row, col]
             cell.set_facecolor('white' if row % 2 == 1 else '#f4f4f4')
             cell.set_edgecolor('#cccccc')
-    tbl.auto_set_column_width([0, 1])
 
     # ── Caption in its own axes (no overlap) ──────────────────────────────────
     ax_cap = fig.add_subplot(outer[2])
