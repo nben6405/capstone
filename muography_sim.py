@@ -44,8 +44,8 @@ BLOCK_X     =  5.0    # cm  left edge
 BLOCK_Y     =  5.0    # cm  bottom edge
 BLOCK_W     = 10.0    # cm  width
 BLOCK_H     = 10.0    # cm  height
-BLOCK_Z     = 10.0    # cm  height above bottom grid (sits between layers)
-BLOCK_ATTEN =  0.2   # fraction of muons blocked (0=transparent, 1=opaque)
+BLOCK_Z     = 30.0    # cm  height above bottom grid (sits between layers)
+BLOCK_ATTEN =  0.70   # fraction of muons blocked (0=transparent, 1=opaque)
 
 # Simulation
 N_MUONS = 100_000
@@ -206,7 +206,11 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
                  target_snr=3.0, step=500):
     """
     Incrementally accumulate events and track when SNR first hits target.
-    SNR = (mean open rate - mean shadow rate) / std(open rate)
+
+    SNR = (mean open count - mean shadow count) / sqrt(mean open count)
+
+    Poisson SNR — noise floor is sqrt(N) for counting statistics.
+    Stable regardless of hit map uniformity, unlike the std-based version.
     """
     hit_map = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
     total_events = 0
@@ -240,14 +244,17 @@ def run_snr_test(config_fn, x0, y0, theta, phi, rng,
         if total_events < 20:
             continue
 
-        rate_map     = hit_map / total_events
-        open_rates   = rate_map[~shadow_mask]
-        shadow_rates = rate_map[shadow_mask]
+        # Work in raw counts — Poisson noise scales as sqrt(N)
+        open_counts   = hit_map[~shadow_mask].astype(float)
+        shadow_counts = hit_map[shadow_mask].astype(float)
 
-        if open_rates.std() == 0 or len(shadow_rates) == 0:
+        if len(shadow_counts) == 0 or open_counts.mean() == 0:
             continue
 
-        snr = (open_rates.mean() - shadow_rates.mean()) / open_rates.std()
+        mean_open   = open_counts.mean()
+        mean_shadow = shadow_counts.mean()
+
+        snr = (mean_open - mean_shadow) / np.sqrt(mean_open)
         snr_history.append(float(snr))
         muon_history.append(i + step)
 
