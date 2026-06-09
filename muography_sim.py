@@ -7,7 +7,7 @@ Simulates two detector configurations for a binary muon shadow imager.
   Config B: Imaging grid on top AND bottom (tiled both layers)
 
 Physical units throughout are cm.
-Muon tracks follow a realistic cos^2(theta) zenith distribution.
+Muon tracks follow a realistic cos^2(theta) zenith distribution (explained in report intro)
 
 Usage:
   python3 muography_sim.py
@@ -512,4 +512,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main() ---- building off of this base code, I want to see the deflection of the muons off of different materials, can you implement this
